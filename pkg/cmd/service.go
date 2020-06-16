@@ -5,28 +5,26 @@ import (
 	"k8s.io/client-go/kubernetes"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/api/core/v1"
-	//"gopkg.in/oleiade/reflections.v1"
 	"fmt"
 	"os"
 	"strings"
 	"github.com/liggitt/tabwriter"
-	// "encoding/json"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 type Service struct {
 	Client *kubernetes.Clientset
 	Namespace string
 	Name string 
-	ServiceType v1.ServiceType
-	Selector map[string]string 
-	Pods []PodObj
-	Ports []v1.ServicePort
+	ServiceType string
+	Pods  string
+	Ports string
 }
 
-type ServiceInterface interface {
-	GetInformation(name string)
-	PrintInformation()
-}
+// type ServiceInterface interface {
+// 	GetInformation(name string)
+// 	PrintInformation()
+// }
 
 func NewService(client *kubernetes.Clientset, namespace string) *Service {
 	return &Service {
@@ -35,29 +33,20 @@ func NewService(client *kubernetes.Clientset, namespace string) *Service {
 	}
 }
 
-// type ServiceInformation struct {
-// 	Name string `json:"name"`
-// 	ServiceType v1.ServiceType `json:"type"`
-// 	Selector map[string]string `json:"selector"`
-// 	Pods []PodObj `json:"pods"`
-// 	Ports []v1.ServicePort `json:"ports"`
-// }
-
 func (s *Service) GetInformation(name string) (err error) {
 
 	service, err := s.Client.CoreV1().Services(s.Namespace).Get(context.TODO(), name, metav1.GetOptions{})
-
-	s.Name = service.Name
-	s.Selector = service.Spec.Selector
-	s.ServiceType = service.Spec.Type
-	s.Ports = service.Spec.Ports
-
-	pod := Pod{
-		s.Client,
-		s.Namespace,
+	if (err != nil){
+		return err
 	}
 
-	s.Pods, err = pod.GetPods(s.Selector)
+	s.Name = service.Name
+	s.ServiceType = ServiceTypeToString(service.Spec.Type)
+	s.Ports = PortsToString(service.Spec.Type, service.Spec.Ports)
+	s.Pods, err = PodsToString(s.Client, s.Namespace, service.Spec.Selector)
+	if (err != nil){
+		return err
+	}
 
 	return
 }
@@ -67,83 +56,80 @@ func (s *Service) PrintInformation() {
 	w := new(tabwriter.Writer)
 	
 	// minwidth, tabwidth, padding, padchar, flags
-	w.Init(os.Stdout, 0, 8, 1, '\t', 0)
+	w.Init(os.Stdout, 0, 8, 2, '\t', 0)
 	
 	defer w.Flush()
 	
-	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t", "NAMESPACE", "SERVICE", "TYPE", "PORTS Port TargetPort NodePort", "PODS Name Status")
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t", "NAME", "TYPE", "PORT(S)", "POD(S)")
 	
-	fmt.Fprintf(w, "\n%s\t%s\t%s\t%s\t%s\t", s.Namespace, s.Name, s.ServiceType, PortsToString(s.ServiceType, s.Ports), PodsToString(s.Pods))
-	//fmt.Fprintf(w, "\n%s\t%s\t%v\t%s\t%s\t", "", "", "", "└──", "")
-
-	// for _, pod := range serviceInformation.Pods {
-	// 	fmt.Fprintf(w, "\n%s\t%s\t%s\t %s\t%s\t", "", "", "", pod.Name, pod.Status)
-	// }
+	fmt.Fprintf(w, "\n%s\t%s\t%s\t%s\t", s.Name, s.ServiceType, s.Ports, s.Pods)
 
 	fmt.Fprintf(w, "\n")
 
 }
 
-func PodsToString(pods []PodObj) string{
-	var podsString strings.Builder
-	arrayLength := len(pods)
+func PodsToString(client *kubernetes.Clientset, namespace string, selector map[string]string) (podsString string, err error){
 
-	for index, pod := range pods {
-		// podsString.WriteString("{")
-		podsString.WriteString(pod.Name)
-		podsString.WriteString(" ")
-		podsString.WriteString(fmt.Sprint(pod.Status))
-		// podsString.WriteString("}")
+	pods, err := client.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: labels.Set(selector).String() })
+	if (err != nil){
+		return "", err
+	}
+
+	var podsBuilder strings.Builder
+	arrayLength := len(pods.Items)
+
+	for index, pod := range pods.Items {
+		podsBuilder.WriteString(pod.Name)	
 
 		if ((index + 1) != arrayLength){
-			podsString.WriteString(", ")
+			podsBuilder.WriteString(",")
 		}
 	}
 
-	return podsString.String()
+	podsString = podsBuilder.String()
+
+	return
 }
 
 func PortsToString(serviceType v1.ServiceType, ports []v1.ServicePort) string {
 
-	var portsString strings.Builder
+	var portsBuilder strings.Builder
 	arrayLength := len(ports)
 
-	for index, item := range ports {
+	for index, port := range ports {
+		portsBuilder.WriteString(fmt.Sprint(port.Port))
+		portsBuilder.WriteString(" ")
 
-		// portsString.WriteString("{")
-		portsString.WriteString(fmt.Sprint(item.Port))
-		portsString.WriteString(" ")
-		
-		switch item.TargetPort.Type {
-			case 0:
-				portsString.WriteString(fmt.Sprint(item.TargetPort.IntVal))
-			case 1:
-				portsString.WriteString(item.TargetPort.StrVal)
-		}
+		switch port.TargetPort.Type {
+		case 0:
+			portsBuilder.WriteString(fmt.Sprint(port.TargetPort.IntVal))
+		case 1:
+			portsBuilder.WriteString(port.TargetPort.StrVal)
+		} 
 
-		if (serviceType != "ClusterIP" ){
-			portsString.WriteString(" ")
-			portsString.WriteString(fmt.Sprint(item.NodePort))
+		if (serviceType != v1.ServiceTypeClusterIP ){
+			portsBuilder.WriteString(" ")
+			portsBuilder.WriteString(fmt.Sprint(port.NodePort))
 		}
-		// portsString.WriteString("}")
 
 		if ((index + 1) != arrayLength){
-			portsString.WriteString(", ")
+			portsBuilder.WriteString(",")
 		}
+
 	}
 
-	return portsString.String()
+	return portsBuilder.String()
 }
 
-// func CheckServiceType(serviceType v1.ServiceType) string {
-// 	switch serviceType {
-// 		case v1.ServiceTypeLoadBalancer:
-// 			return "LoadBalancer"
-// 		case v1.ServiceTypeNodePort:
-// 			return "NodePort" 
-// 		case v1.ServiceTypeClusterIP:
-// 			return "ClusterIP"
-// 	}
+func ServiceTypeToString(serviceType v1.ServiceType) string {
+	switch serviceType {
+		case v1.ServiceTypeLoadBalancer:
+			return "LoadBalancer"
+		case v1.ServiceTypeNodePort:
+			return "NodePort" 
+		case v1.ServiceTypeClusterIP:
+			return "ClusterIP"
+	}
 
-// 	return "Unknown"
-// }
+	return "Unknown"
+}
