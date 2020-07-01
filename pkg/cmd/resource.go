@@ -25,11 +25,13 @@ type Engine struct {
 	config *rest.Config
 	args []string
 	resourceInterface ResourceInterface
+	printGraph bool
 }
 
 type ResourceInterface interface {
 	GetInformation(name string) error
 	PrintInformation()
+	PrintGraph()
 }
 
 func NewEngine(streams genericclioptions.IOStreams) *Engine {
@@ -62,7 +64,7 @@ func NewCmd(streams genericclioptions.IOStreams) *cobra.Command {
 		},
 	}
 
-	//cmd.Flags().BoolVar(&g.listNamespaces, "list", g.listNamespaces, "if true, print the list of all namespaces in the current KUBECONFIG")
+	cmd.Flags().BoolVar(&e.printGraph, "graph", e.printGraph, "if true, print the route information in a tree graph format")
 	e.configFlags.AddFlags(cmd.Flags())
 
 	return cmd
@@ -126,7 +128,12 @@ func (e *Engine) Run() (err error) {
 	if err != nil {
 		return err
 	}
-	e.resourceInterface.PrintInformation()
+
+	if e.printGraph {
+		e.resourceInterface.PrintGraph()
+	} else {
+		e.resourceInterface.PrintInformation()
+	}
 
 	return nil
 }

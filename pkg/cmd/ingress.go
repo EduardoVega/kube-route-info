@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"github.com/liggitt/tabwriter"
+	"strings"
+	"github.com/xlab/treeprint"
 )
 
 type Ingress struct {
@@ -96,6 +98,28 @@ func (i *Ingress) PrintInformation() {
 	}
 
 	fmt.Fprintf(w, "\n")
+}
+
+func (i *Ingress) PrintGraph() {
+	tree := treeprint.New()
+
+	ingress := tree.AddBranch(i.Name)
+
+	for _, rule := range i.Rules {
+
+		hostBranch := ingress.AddBranch(rule.Host)
+
+		for _, ingressRule := range rule.IngressRules {
+			ruleBranch := hostBranch.AddBranch(ingressRule.Path)
+			serviceBranch := ruleBranch.AddBranch(ingressRule.ServiceInfo.Name)
+
+			for _, pod := range strings.Split(ingressRule.ServiceInfo.Pods, ","){
+				serviceBranch.AddNode(pod)
+			}
+		}
+	}
+
+	fmt.Println(ingress.String())
 }
 
 func GetServiceInfo(client *kubernetes.Clientset, namespace, serviceName string) (service *Service) {

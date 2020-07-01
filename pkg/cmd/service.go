@@ -10,6 +10,7 @@ import (
 	"strings"
 	"github.com/liggitt/tabwriter"
 	"k8s.io/apimachinery/pkg/labels"
+	"github.com/xlab/treeprint"
 )
 
 type Service struct {
@@ -66,6 +67,18 @@ func (s *Service) PrintInformation() {
 
 	fmt.Fprintf(w, "\n")
 
+}
+
+func (s *Service) PrintGraph() {
+	tree := treeprint.New()
+
+	service := tree.AddBranch(s.Name)
+
+	for _, pod := range strings.Split(s.Pods, ","){
+		service.AddNode(pod)
+	}
+
+	fmt.Println(service.String())
 }
 
 func PodsToString(client *kubernetes.Clientset, namespace string, selector map[string]string) (podsString string, err error){
