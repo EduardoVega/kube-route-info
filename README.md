@@ -1,6 +1,6 @@
 # `kube-route-info`: kubectl tool
 
-kube-route-info is a tool that provides the route information that has been configured on Ingresses or Services to access Pods.
+kube-route-info is a tool that provides the route information that has been configured on Ingresses or Services to redirect traffic to Pods.
 
 ## Usage
 

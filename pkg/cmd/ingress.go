@@ -2,94 +2,142 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"fmt"
-	"strings"
+	"io"
 
 	"github.com/xlab/treeprint"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/printers"
-	"k8s.io/client-go/kubernetes"
 )
 
-// Ingress contains the ingress object information
+// Ingress defines Ingress atributes
 type Ingress struct {
-	Client    *kubernetes.Clientset
+	Client    ClientInterface
 	Namespace string
-	Name      string
-	Rules     []RulesInfo
 }
 
-// RulesInfo contains the rules configured in the ingress
-type RulesInfo struct {
-	Host         string
-	IngressRules []IngressRuleInfo
-}
-
-// IngressRuleInfo contains the information of each rule configured in the ingress
-type IngressRuleInfo struct {
-	Path        string
-	ServiceName string
-	ServicePort string
-	ServiceInfo *Service
-}
-
-// NewIngress returns a new ingress struct
-func NewIngress(client *kubernetes.Clientset, namespace string) *Ingress {
+// NewIngress returns a new Ingress struct
+func NewIngress(client ClientInterface, namespace string) *Ingress {
 	return &Ingress{
 		Client:    client,
 		Namespace: namespace,
 	}
 }
 
-// GetInformation gets the ingress information and its backend services
-func (i *Ingress) GetInformation(name string) (err error) {
+// PrintGraph prints ingress route information in a tree graph format
+func (i *Ingress) PrintGraph(name string, w io.Writer) (err error) {
 
-	ingress, err := i.Client.NetworkingV1beta1().Ingresses(i.Namespace).Get(context.TODO(), name, metav1.GetOptions{})
+	ingress, err := i.Client.GetIngressByName(name)
 	if err != nil {
 		return err
 	}
 
-	i.Name = ingress.Name
-	i.Rules = []RulesInfo{}
+	tree := treeprint.New()
+
+	ingressBranch := tree.AddMetaBranch("Ingress", ingress.Name)
 
 	for _, rule := range ingress.Spec.Rules {
-		rulesInfo := RulesInfo{}
 
-		rulesInfo.Host = rule.Host
-		rulesInfo.IngressRules = []IngressRuleInfo{}
+		hostBranch := ingressBranch.AddBranch(rule.Host)
 
-		for _, path := range rule.IngressRuleValue.HTTP.Paths {
-			ingressRuleInfo := IngressRuleInfo{}
-			ingressRuleInfo.Path = path.Path
-			ingressRuleInfo.ServiceName = path.Backend.ServiceName
-			ingressRuleInfo.ServiceInfo = GetServiceInfo(i.Client, i.Namespace, path.Backend.ServiceName)
+		for _, ingressRule := range rule.IngressRuleValue.HTTP.Paths {
+			ruleBranch := hostBranch.AddBranch(ingressRule.Path)
 
-			switch path.Backend.ServicePort.Type {
-			case 0:
-				ingressRuleInfo.ServicePort = fmt.Sprint(path.Backend.ServicePort.IntVal)
-			case 1:
-				ingressRuleInfo.ServicePort = path.Backend.ServicePort.StrVal
+			// Get service resource
+			service, err := i.Client.GetServiceByName(ingressRule.Backend.ServiceName)
+			if err != nil {
+				ruleBranch.AddMetaBranch("Service", ingressRule.Backend.ServiceName+" *Not found*")
+
+			} else {
+				serviceBranch := ruleBranch.AddMetaBranch("Service", service.Name)
+
+				// Check service type
+				if ServiceTypeToString(service.Spec.Type) == "ExternalName" {
+					serviceBranch.AddMetaNode("Hostname", service.Spec.ExternalName)
+
+				} else {
+
+					// Get pod resources
+					pods, err := i.Client.GetPodsByLabels(service.Spec.Selector)
+					if err != nil {
+						return err
+					}
+
+					for _, pod := range pods.Items {
+						serviceBranch.AddMetaNode("Pod", pod.Name)
+					}
+				}
 			}
-
-			rulesInfo.IngressRules = append(rulesInfo.IngressRules, ingressRuleInfo)
 		}
-
-		i.Rules = append(i.Rules, rulesInfo)
 	}
+
+	fmt.Fprint(w, ingressBranch.String())
 
 	return
 }
 
-// PrintInformation prints the route information in table format
-func (i *Ingress) PrintInformation() {
+// PrintTable prints ingress route information in table format
+func (i *Ingress) PrintTable(name string, w io.Writer) (err error) {
+
+	ingress, err := i.Client.GetIngressByName(name)
+	if err != nil {
+		return nil
+	}
 
 	rows := []metav1.TableRow{}
 
-	for _, rule := range i.Rules {
-		for _, ingressRule := range rule.IngressRules {
+	// Default column name for pods
+	podColumnName := "Pod(s)"
+
+	for _, rule := range ingress.Spec.Rules {
+		for _, ingressRule := range rule.IngressRuleValue.HTTP.Paths {
+
+			// If service does not exist
+			serviceName := ingressRule.Backend.ServiceName + " *Not found*"
+			serviceType := ""
+			servicePorts := ""
+			servicePodsHostname := ""
+
+			// Get service resource
+			service, err := i.Client.GetServiceByName(ingressRule.Backend.ServiceName)
+
+			// If service does exist
+			if err == nil {
+				serviceName = service.Name
+				serviceType = ServiceTypeToString(service.Spec.Type)
+				servicePorts = PortsToString(service.Spec.Ports)
+
+				// Check service type
+				if ServiceTypeToString(service.Spec.Type) == "ExternalName" {
+					servicePodsHostname = service.Spec.ExternalName
+					podColumnName = "Pod(s)/Hostname"
+
+				} else {
+					// Get pod resources
+					pods, err := i.Client.GetPodsByLabels(service.Spec.Selector)
+					if err != nil {
+						return nil
+					}
+
+					servicePodsHostname = PodsToString(pods)
+				}
+			}
+
 			rows = append(rows, metav1.TableRow{
-				Cells: []interface{}{i.Name, rule.Host, ingressRule.Path, ingressRule.ServicePort, ingressRule.ServiceInfo.Name, ingressRule.ServiceInfo.ServiceType, ingressRule.ServiceInfo.Ports, ingressRule.ServiceInfo.Pods},
+				Cells: []interface{}{
+					ingress.Name,
+					rule.Host,
+					ingressRule.Path,
+					PortToString(
+						ingressRule.Backend.ServicePort.Type,
+						ingressRule.Backend.ServicePort.StrVal,
+						ingressRule.Backend.ServicePort.IntVal,
+					),
+					serviceName,
+					serviceType,
+					servicePorts,
+					servicePodsHostname,
+				},
 			})
 		}
 	}
@@ -102,8 +150,8 @@ func (i *Ingress) PrintInformation() {
 			{Name: "Port", Type: "string"},
 			{Name: "Service", Type: "string"},
 			{Name: "Type", Type: "string"},
-			{Name: "Port(s)", Type: "string"},
-			{Name: "Pod(s)", Type: "string"},
+			{Name: "Service Port(s)", Type: "string"},
+			{Name: podColumnName, Type: "string"},
 		},
 		Rows: rows,
 	}
@@ -112,44 +160,7 @@ func (i *Ingress) PrintInformation() {
 	printer := printers.NewTablePrinter(printers.PrintOptions{})
 	printer.PrintObj(table, out)
 
-	fmt.Print(out.String())
-}
-
-// PrintGraph prints the route information in a tree graph format
-func (i *Ingress) PrintGraph() {
-	tree := treeprint.New()
-
-	ingress := tree.AddMetaBranch("Ingress", i.Name)
-
-	for _, rule := range i.Rules {
-
-		hostBranch := ingress.AddBranch(rule.Host)
-
-		for _, ingressRule := range rule.IngressRules {
-			ruleBranch := hostBranch.AddBranch(ingressRule.Path)
-			serviceBranch := ruleBranch.AddMetaBranch("Service", ingressRule.ServiceInfo.Name)
-
-			for _, pod := range strings.Split(ingressRule.ServiceInfo.Pods, ",") {
-				serviceBranch.AddMetaNode("Pod", pod)
-			}
-		}
-	}
-
-	fmt.Println(ingress.String())
-}
-
-// GetServiceInfo gets the information of the services configured in the ingress
-func GetServiceInfo(client *kubernetes.Clientset, namespace, serviceName string) (service *Service) {
-	service = NewService(client, namespace)
-
-	var err error
-	err = service.GetInformation(serviceName)
-	if err != nil {
-		service.Name = "<none>"
-		service.ServiceType = "<none>"
-		service.Pods = "<none>"
-		service.Ports = "<none>"
-	}
+	fmt.Fprint(w, out.String())
 
 	return
 }

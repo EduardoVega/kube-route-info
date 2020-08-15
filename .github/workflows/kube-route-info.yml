@@ -30,5 +30,8 @@ jobs:
             dep ensure
         fi
 
+    - name: Run unit tests
+      run: go test -v kube-route-info/pkg/cmd
+
     - name: Build
       run: go build -v cmd/kube-route-info.go 

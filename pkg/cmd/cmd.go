@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -31,9 +33,8 @@ type Resource struct {
 // ResourceInterface defines the methods the must be
 // implemented in the ingress and service structs
 type ResourceInterface interface {
-	GetInformation(name string) error
-	PrintInformation()
-	PrintGraph()
+	PrintTable(string, io.Writer) error
+	PrintGraph(string, io.Writer) error
 }
 
 // NewResource creates a new Resource struct with the required information
@@ -116,30 +117,33 @@ func (r *Resource) Complete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	client := NewClient(clientset, namespace)
+
 	switch r.resourceType {
 	case "service":
-		r.resourceInterface = NewService(clientset, namespace)
+		r.resourceInterface = NewService(client, namespace)
 
 	case "ingress":
-		r.resourceInterface = NewIngress(clientset, namespace)
+		r.resourceInterface = NewIngress(client, namespace)
 	}
 
 	return nil
 }
 
-// Run passes the information and executes the command
+// Run executes the command of printing the route information
 func (r *Resource) Run() (err error) {
 
-	err = r.resourceInterface.GetInformation(r.resourceName)
-	if err != nil {
-		return err
-	}
-
 	if r.printGraph {
-		r.resourceInterface.PrintGraph()
+		err := r.resourceInterface.PrintGraph(r.resourceName, os.Stdout)
+		if err != nil {
+			return err
+		}
 	} else {
-		r.resourceInterface.PrintInformation()
+		err := r.resourceInterface.PrintTable(r.resourceName, os.Stdout)
+		if err != nil {
+			return err
+		}
 	}
 
-	return nil
+	return
 }
